@@ -13,7 +13,8 @@ async def main():
     bot = Bot(token=BOT_TOKEN,
               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
-    dp.include_routers(music_router, channel_router)
+    dp.include_router(music_router)
+    dp.include_routers(channel_router, music_router)
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 if __name__ == '__main__':
