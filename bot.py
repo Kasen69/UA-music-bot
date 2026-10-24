@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -10,10 +11,11 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, FSInputFile
+from aiogram.types import Message, FSInputFile, LinkPreviewOptions
 
 from mutagen.id3 import ID3, ID3NoHeaderError, APIC
 from mutagen.mp3 import MP3
@@ -28,9 +30,25 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 if not BOT_TOKEN:
-    raise ValueError(
-        "❌ BOT_TOKEN не знайдено у файлі .env"
-    )
+    raise ValueError("❌ BOT_TOKEN не знайдено у файлі .env")
+
+CHANNEL_USERNAME = "uaoldmusic"
+
+POST_FOOTER = (
+    "📲 <b>Наші майданчики:</b>\n\n"
+    "✈️ <b>Telegram:</b>\n"
+    "• https://t.me/uaoldmusic\n"
+    "🎬 <b>TikTok:</b>\n"
+    "• https://www.tiktok.com/@ua_mussicc/\n"
+    "▶️ <b>YouTube:</b>\n"
+    "• https://www.youtube.com/@uaoldmusic\n\n"
+    "🖤 <b>Підтримуй українську музику — відкривай нове "
+    "та ділися тим, що зачепило.</b>\n"
+    "<i>Починаємо з музики — будуємо спільноту.</i>"
+)
+
+FOOTER_MARKER = "Починаємо з музики — будуємо спільноту."
+FOOTER_TEXT = re.sub(r"<[^>]+>", "", POST_FOOTER)
 
 
 # ============================================================
@@ -39,7 +57,7 @@ if not BOT_TOKEN:
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
+    format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
 logger = logging.getLogger(__name__)
@@ -51,9 +69,7 @@ logger = logging.getLogger(__name__)
 
 bot = Bot(
     token=BOT_TOKEN,
-    default=DefaultBotProperties(
-        parse_mode=ParseMode.HTML
-    )
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML),
 )
 
 dp = Dispatcher()
@@ -73,142 +89,84 @@ class MusicState(StatesGroup):
 # ============================================================
 
 def is_mp3(filename: str) -> bool:
-    """
-    Перевіряє розширення файлу.
-    """
-
     return Path(filename).suffix.lower() == ".mp3"
 
 
 def is_image(filename: str) -> bool:
-    """
-    Перевіряє, чи є файл зображенням.
-    """
-
     return Path(filename).suffix.lower() in {
-        ".jpg",
-        ".jpeg",
-        ".png"
+        ".jpg", ".jpeg", ".png"
     }
 
 
 def get_mime_type(filename: str) -> str:
-    """
-    Визначає MIME-тип картинки.
-    """
-
-    extension = Path(filename).suffix.lower()
-
-    if extension in {".jpg", ".jpeg"}:
-        return "image/jpeg"
-
-    if extension == ".png":
+    if Path(filename).suffix.lower() == ".png":
         return "image/png"
 
     return "image/jpeg"
 
 
 def check_mp3(path: Path) -> bool:
-    """
-    Перевіряє, чи файл є коректним MP3.
-    """
-
     try:
         audio = MP3(path)
-
         return audio.info is not None
-
     except Exception:
         return False
 
 
+def telegram_length(text: str) -> int:
+    # Telegram використовує UTF-16 для позицій у тексті.
+    # Така перевірка також враховує емодзі.
+    return len(text.encode("utf-16-le")) // 2
+
+
 async def download_telegram_file(
     file_id: str,
-    destination: Path
+    destination: Path,
 ):
-    """
-    Завантажує файл із Telegram
-    у вказаний локальний шлях.
-    """
-
-    telegram_file = await bot.get_file(
-        file_id
-    )
+    telegram_file = await bot.get_file(file_id)
 
     if not telegram_file.file_path:
-        raise RuntimeError(
-            "Telegram не повернув шлях до файлу."
-        )
+        raise RuntimeError("Telegram не повернув шлях до файлу.")
 
     await bot.download_file(
         telegram_file.file_path,
-        destination
+        destination,
     )
+
+
+async def clear_operation(state: FSMContext):
+    data = await state.get_data()
+    temp_dir = data.get("temp_dir")
+
+    if temp_dir:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    await state.clear()
 
 
 # ============================================================
 # ЗАМІНА ОБКЛАДИНКИ
 # ============================================================
 
-def replace_cover(
-    mp3_path: Path,
-    image_path: Path
-):
-    """
-    Видаляє стару обкладинку MP3
-    та додає нову.
-
-    Інші ID3-метадані не змінюються.
-    """
-
-    # --------------------------------------------------------
-    # Отримуємо існуючі ID3-теги
-    # --------------------------------------------------------
-
+def replace_cover(mp3_path: Path, image_path: Path):
     try:
         tags = ID3(mp3_path)
-
     except ID3NoHeaderError:
         tags = ID3()
 
-    # --------------------------------------------------------
-    # Видаляємо стару обкладинку
-    # --------------------------------------------------------
-
     tags.delall("APIC")
-
-    # --------------------------------------------------------
-    # Читаємо нову картинку
-    # --------------------------------------------------------
-
-    image_data = image_path.read_bytes()
-
-    mime_type = get_mime_type(
-        image_path.name
-    )
-
-    # --------------------------------------------------------
-    # Додаємо нову обкладинку
-    # --------------------------------------------------------
 
     tags.add(
         APIC(
             encoding=3,
-            mime=mime_type,
-            type=3,          # Front Cover
+            mime=get_mime_type(image_path.name),
+            type=3,
             desc="Cover",
-            data=image_data
+            data=image_path.read_bytes(),
         )
     )
 
-    # --------------------------------------------------------
-    # Зберігаємо метадані
-    # --------------------------------------------------------
-
-    tags.save(
-        mp3_path,
-        v2_version=3
-    )
+    tags.save(mp3_path, v2_version=3)
 
 
 # ============================================================
@@ -218,27 +176,9 @@ def replace_cover(
 @dp.message(Command("start"))
 async def start_command(
     message: Message,
-    state: FSMContext
+    state: FSMContext,
 ):
-    """
-    Запускає процес.
-    """
-
-    # Видаляємо старі тимчасові файли,
-    # якщо вони залишилися.
-    data = await state.get_data()
-
-    old_temp_dir = data.get(
-        "temp_dir"
-    )
-
-    if old_temp_dir:
-        shutil.rmtree(
-            old_temp_dir,
-            ignore_errors=True
-        )
-
-    await state.clear()
+    await clear_operation(state)
 
     await message.answer(
         "🎵 <b>Music Cover Bot</b>\n\n"
@@ -247,9 +187,7 @@ async def start_command(
         "яку потрібно поставити на обкладинку."
     )
 
-    await state.set_state(
-        MusicState.waiting_for_mp3
-    )
+    await state.set_state(MusicState.waiting_for_mp3)
 
 
 # ============================================================
@@ -259,25 +197,9 @@ async def start_command(
 @dp.message(Command("cancel"))
 async def cancel_command(
     message: Message,
-    state: FSMContext
+    state: FSMContext,
 ):
-    """
-    Скасовує поточну операцію.
-    """
-
-    data = await state.get_data()
-
-    temp_dir = data.get(
-        "temp_dir"
-    )
-
-    if temp_dir:
-        shutil.rmtree(
-            temp_dir,
-            ignore_errors=True
-        )
-
-    await state.clear()
+    await clear_operation(state)
 
     await message.answer(
         "❌ Операцію скасовано.\n\n"
@@ -289,40 +211,27 @@ async def cancel_command(
 # MP3 ЯК AUDIO
 # ============================================================
 
-@dp.message(
-    MusicState.waiting_for_mp3,
-    F.audio
-)
+@dp.message(MusicState.waiting_for_mp3, F.audio)
 async def receive_mp3_audio(
     message: Message,
-    state: FSMContext
+    state: FSMContext,
 ):
-    """
-    Отримує MP3, відправлений
-    як звичайне Telegram Audio.
-    """
-
     audio = message.audio
 
     if not audio:
         return
 
-    filename = (
-        audio.file_name
-        or "music.mp3"
-    )
+    filename = audio.file_name or "music.mp3"
 
     if not is_mp3(filename):
-        await message.answer(
-            "❌ Потрібен саме MP3-файл."
-        )
+        await message.answer("❌ Потрібен саме MP3-файл.")
         return
 
     await save_mp3(
         file_id=audio.file_id,
         filename=filename,
         message=message,
-        state=state
+        state=state,
     )
 
 
@@ -330,40 +239,27 @@ async def receive_mp3_audio(
 # MP3 ЯК DOCUMENT
 # ============================================================
 
-@dp.message(
-    MusicState.waiting_for_mp3,
-    F.document
-)
+@dp.message(MusicState.waiting_for_mp3, F.document)
 async def receive_mp3_document(
     message: Message,
-    state: FSMContext
+    state: FSMContext,
 ):
-    """
-    Отримує MP3, відправлений
-    як Telegram Document.
-    """
-
     document = message.document
 
     if not document:
         return
 
-    filename = (
-        document.file_name
-        or ""
-    )
+    filename = document.file_name or ""
 
     if not is_mp3(filename):
-        await message.answer(
-            "❌ Потрібен саме MP3-файл."
-        )
+        await message.answer("❌ Потрібен саме MP3-файл.")
         return
 
     await save_mp3(
         file_id=document.file_id,
         filename=filename,
         message=message,
-        state=state
+        state=state,
     )
 
 
@@ -375,82 +271,52 @@ async def save_mp3(
     file_id: str,
     filename: str,
     message: Message,
-    state: FSMContext
+    state: FSMContext,
 ):
-    """
-    Завантажує MP3 та переводить
-    бота в режим очікування фото.
-    """
+    temp_dir = Path(tempfile.mkdtemp(prefix="music_cover_bot_"))
 
-    temp_dir = Path(
-        tempfile.mkdtemp(
-            prefix="music_cover_bot_"
-        )
-    )
-
-    mp3_path = (
-        temp_dir / filename
-    )
+    # Зберігаємо лише ім'я файлу без сторонніх шляхів.
+    safe_filename = Path(filename.replace("\\", "/")).name
+    mp3_path = temp_dir / safe_filename
 
     try:
+        await message.answer("⏳ Завантажую MP3...")
 
-        await message.answer(
-            "⏳ Завантажую MP3..."
-        )
+        await download_telegram_file(file_id, mp3_path)
 
-        # Завантаження MP3
-        await download_telegram_file(
-            file_id,
-            mp3_path
-        )
-
-        # Перевірка MP3
-        if not check_mp3(mp3_path):
-
-            shutil.rmtree(
-                temp_dir,
-                ignore_errors=True
-            )
+        if not await asyncio.to_thread(check_mp3, mp3_path):
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
             await message.answer(
-                "❌ Не вдалося прочитати "
-                "цей MP3-файл."
+                "❌ Не вдалося прочитати цей MP3-файл."
             )
-
             return
 
-        # Зберігаємо інформацію
         await state.update_data(
             temp_dir=str(temp_dir),
             mp3_path=str(mp3_path),
-            filename=filename
+            filename=safe_filename,
         )
+
+        await state.set_state(MusicState.waiting_for_cover)
 
         await message.answer(
             "✅ <b>MP3 отримано!</b>\n\n"
             "🖼 Тепер надішли фотографію, "
-            "яку потрібно поставити "
-            "на обкладинку."
-        )
-
-        await state.set_state(
-            MusicState.waiting_for_cover
+            "яку потрібно поставити на обкладинку."
         )
 
     except Exception:
+        logger.exception("Помилка під час завантаження MP3")
 
-        logger.exception(
-            "Помилка під час завантаження MP3"
-        )
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
-        shutil.rmtree(
-            temp_dir,
-            ignore_errors=True
-        )
+        await state.clear()
+        await state.set_state(MusicState.waiting_for_mp3)
 
         await message.answer(
-            "❌ Сталася помилка під час "
-            "завантаження MP3."
+            "❌ Сталася помилка під час завантаження MP3.\n"
+            "Спробуй надіслати файл ще раз."
         )
 
 
@@ -458,143 +324,89 @@ async def save_mp3(
 # ФОТО ЯК TELEGRAM PHOTO
 # ============================================================
 
-@dp.message(
-    MusicState.waiting_for_cover,
-    F.photo
-)
+@dp.message(MusicState.waiting_for_cover, F.photo)
 async def receive_cover_photo(
     message: Message,
-    state: FSMContext
+    state: FSMContext,
 ):
-    """
-    Отримує звичайне Telegram-фото.
-    """
-
     if not message.photo:
         return
 
-    # Беремо найбільшу версію
-    photo = message.photo[-1]
-
-    data = await state.get_data()
-
-    temp_dir = Path(
-        data["temp_dir"]
+    await process_cover(
+        message=message,
+        state=state,
+        file_id=message.photo[-1].file_id,
+        extension=".jpg",
     )
-
-    cover_path = (
-        temp_dir / "cover.jpg"
-    )
-
-    try:
-
-        await message.answer(
-            "⏳ Вбудовую фотографію "
-            "в MP3..."
-        )
-
-        await download_telegram_file(
-            photo.file_id,
-            cover_path
-        )
-
-        await finish(
-            message=message,
-            state=state,
-            cover_path=cover_path
-        )
-
-    except Exception:
-
-        logger.exception(
-            "Помилка під час обробки фото"
-        )
-
-        await message.answer(
-            "❌ Не вдалося обробити "
-            "фотографію."
-        )
 
 
 # ============================================================
 # ФОТО ЯК JPG / PNG ФАЙЛ
 # ============================================================
 
-@dp.message(
-    MusicState.waiting_for_cover,
-    F.document
-)
+@dp.message(MusicState.waiting_for_cover, F.document)
 async def receive_cover_document(
     message: Message,
-    state: FSMContext
+    state: FSMContext,
 ):
-    """
-    Отримує JPG / JPEG / PNG,
-    відправлений як файл.
-    """
-
     document = message.document
 
     if not document:
         return
 
-    filename = (
-        document.file_name
-        or ""
-    )
+    filename = document.file_name or ""
 
     if not is_image(filename):
-
         await message.answer(
-            "❌ Надішли фотографію "
-            "або JPG/PNG-файл."
+            "❌ Надішли фотографію або JPG/PNG-файл."
         )
-
         return
 
+    await process_cover(
+        message=message,
+        state=state,
+        file_id=document.file_id,
+        extension=Path(filename).suffix.lower(),
+    )
+
+
+async def process_cover(
+    message: Message,
+    state: FSMContext,
+    file_id: str,
+    extension: str,
+):
     data = await state.get_data()
 
-    temp_dir = Path(
-        data["temp_dir"]
-    )
+    if not data.get("temp_dir") or not data.get("mp3_path"):
+        await clear_operation(state)
+        await message.answer(
+            "❌ Дані попереднього треку втрачено.\n"
+            "Натисни /start і надішли MP3 ще раз."
+        )
+        return
 
-    extension = Path(
-        filename
-    ).suffix.lower()
-
-    cover_path = (
-        temp_dir
-        / f"cover{extension}"
-    )
+    cover_path = Path(data["temp_dir"]) / f"cover{extension}"
 
     try:
+        await message.answer("⏳ Вбудовую фотографію в MP3...")
 
-        await message.answer(
-            "⏳ Вбудовую фотографію "
-            "в MP3..."
-        )
-
-        await download_telegram_file(
-            document.file_id,
-            cover_path
-        )
-
-        await finish(
-            message=message,
-            state=state,
-            cover_path=cover_path
-        )
+        await download_telegram_file(file_id, cover_path)
 
     except Exception:
-
-        logger.exception(
-            "Помилка під час обробки обкладинки"
-        )
+        logger.exception("Помилка під час завантаження обкладинки")
 
         await message.answer(
-            "❌ Не вдалося обробити "
-            "фотографію."
+            "❌ Не вдалося завантажити фотографію.\n"
+            "Спробуй надіслати її ще раз."
         )
+        return
+
+    await finish(
+        message=message,
+        state=state,
+        cover_path=cover_path,
+    )
 
 
 # ============================================================
@@ -604,117 +416,54 @@ async def receive_cover_document(
 async def finish(
     message: Message,
     state: FSMContext,
-    cover_path: Path
+    cover_path: Path,
 ):
-    """
-    Вбудовує обкладинку в MP3
-    та повертає файл користувачу.
-    """
-
     data = await state.get_data()
-
-    temp_dir = Path(
-        data["temp_dir"]
-    )
-
-    mp3_path = Path(
-        data["mp3_path"]
-    )
+    mp3_path = Path(data["mp3_path"])
 
     try:
-
-        # ----------------------------------------------------
-        # ВБУДОВУЄМО ОБКЛАДИНКУ
-        # ----------------------------------------------------
-
-        replace_cover(
+        await asyncio.to_thread(
+            replace_cover,
             mp3_path,
-            cover_path
+            cover_path,
         )
 
-        logger.info(
-            "Обкладинку успішно додано: %s",
-            mp3_path
-        )
+        logger.info("Обкладинку успішно додано: %s", mp3_path)
 
-        # ----------------------------------------------------
-        # ПОВІДОМЛЕННЯ
-        # ----------------------------------------------------
+        await message.answer("📤 Готово! Надсилаю MP3...")
 
-        await message.answer(
-            "📤 Готово! Надсилаю MP3..."
-        )
-
-        # ----------------------------------------------------
-        # НАЗВА БЕЗ .MP3
-        # ----------------------------------------------------
-
-        telegram_filename = (
-            mp3_path.stem
-        )
-
-        # ----------------------------------------------------
-        # ПОВЕРТАЄМО MP3
-        # ----------------------------------------------------
-
+        # Обкладинка вже вбудована всередину MP3.
         await message.answer_audio(
             audio=FSInputFile(
                 mp3_path,
-                filename=telegram_filename
-            ),
-
-            # Передаємо обкладинку
-            # окремо Telegram
-            thumbnail=FSInputFile(
-                cover_path
+                filename=mp3_path.name,
             ),
         )
 
-    except Exception as e:
-
-        logger.exception(
-            "Помилка під час обробки MP3: %s",
-            e
-        )
+    except Exception:
+        logger.exception("Помилка під час обробки MP3")
 
         await message.answer(
-            "❌ Не вдалося додати "
-            "обкладинку до цього MP3."
+            "❌ Не вдалося обробити або надіслати цей MP3."
         )
 
     finally:
+        await clear_operation(state)
 
-        # ----------------------------------------------------
-        # ВИДАЛЯЄМО ТИМЧАСОВІ ФАЙЛИ
-        # ----------------------------------------------------
-
-        shutil.rmtree(
-            temp_dir,
-            ignore_errors=True
-        )
-
-        await state.clear()
-
-        await message.answer(
-            "🔄 Для наступного треку "
-            "надішли /start."
-        )
+    await message.answer(
+        "🔄 Для наступного треку надішли /start."
+    )
 
 
 # ============================================================
 # НЕПРАВИЛЬНИЙ ФОРМАТ MP3
 # ============================================================
 
-@dp.message(
-    MusicState.waiting_for_mp3
-)
-async def wrong_mp3(
-    message: Message
-):
+@dp.message(MusicState.waiting_for_mp3)
+async def wrong_mp3(message: Message):
     await message.answer(
         "🎵 Я очікую MP3-файл.\n\n"
-        "Надішли його як аудіо "
-        "або документ."
+        "Надішли його як аудіо або документ."
     )
 
 
@@ -722,17 +471,117 @@ async def wrong_mp3(
 # НЕПРАВИЛЬНИЙ ФОРМАТ ФОТО
 # ============================================================
 
-@dp.message(
-    MusicState.waiting_for_cover
-)
-async def wrong_cover(
-    message: Message
-):
+@dp.message(MusicState.waiting_for_cover)
+async def wrong_cover(message: Message):
     await message.answer(
         "🖼 Я очікую фотографію.\n\n"
-        "Надішли її як фото "
-        "або JPG/PNG-файл."
+        "Надішли її як фото або JPG/PNG-файл."
     )
+
+
+# ============================================================
+# АВТОМАТИЧНИЙ ПІДПИС У КАНАЛІ
+# ============================================================
+
+def is_music_post(message: Message) -> bool:
+    # Пропускаємо всі пости з Telegram Audio.
+    if message.audio:
+        return True
+
+    # Перевіряємо MP3, надіслані як документ.
+    if message.document:
+        filename = message.document.file_name or ""
+        mime_type = (message.document.mime_type or "").lower()
+
+        return (
+            is_mp3(filename)
+            or mime_type in {"audio/mpeg", "audio/mp3"}
+        )
+
+    return False
+
+
+@dp.channel_post()
+async def add_channel_footer(message: Message):
+    username = (message.chat.username or "").lower()
+
+    if username != CHANNEL_USERNAME.lower().lstrip("@"):
+        return
+
+    if is_music_post(message):
+        return
+
+    original_text = message.text or message.caption or ""
+
+    # Не додаємо підпис, якщо він уже є.
+    if FOOTER_MARKER in original_text:
+        return
+
+    # Для альбому обробляємо тільки елемент із підписом.
+    if message.media_group_id and not message.caption:
+        return
+
+    if message.text is not None:
+        original_html = message.html_text or ""
+        limit = 4096
+
+    elif (
+        message.photo
+        or message.video
+        or message.animation
+        or message.document
+        or message.voice
+    ):
+        original_html = message.html_caption or ""
+        limit = 1024
+
+    else:
+        # Пропускаємо службові повідомлення, опитування тощо.
+        return
+
+    separator = "\n\n" if original_text else ""
+    visible_text = original_text + separator + FOOTER_TEXT
+
+    if telegram_length(visible_text) > limit:
+        logger.warning(
+            "Пост %s: підпис не вміщується в ліміт Telegram.",
+            message.message_id,
+        )
+        return
+
+    updated_text = original_html + separator + POST_FOOTER
+
+    try:
+        if message.text is not None:
+            await message.edit_text(
+                text=updated_text,
+                parse_mode=ParseMode.HTML,
+                link_preview_options=LinkPreviewOptions(
+                    is_disabled=True,
+                ),
+                reply_markup=message.reply_markup,
+            )
+
+        else:
+            await message.edit_caption(
+                caption=updated_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=message.reply_markup,
+                show_caption_above_media=(
+                    message.show_caption_above_media
+                ),
+            )
+
+        logger.info(
+            "Підпис додано до поста %s",
+            message.message_id,
+        )
+
+    except (TelegramBadRequest, TelegramForbiddenError):
+        logger.exception(
+            "Не вдалося додати підпис до поста %s",
+            message.message_id,
+        )
 
 
 # ============================================================
@@ -740,23 +589,16 @@ async def wrong_cover(
 # ============================================================
 
 async def main():
-
-    logger.info(
-        "Music Cover Bot запущено"
-    )
+    logger.info("Music Cover Bot запущено")
 
     await dp.start_polling(
-        bot
+        bot,
+        allowed_updates=dp.resolve_used_update_types(),
     )
 
 
 if __name__ == "__main__":
-
     try:
         asyncio.run(main())
-
     except KeyboardInterrupt:
-
-        logger.info(
-            "Бот зупинений."
-        )
+        logger.info("Бот зупинений.")
