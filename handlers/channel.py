@@ -13,8 +13,8 @@ router = Router(name="channel")
 
 COMMENT_TEXT = (
     "📲 <b>Наші майданчики:</b>\n\n"
-    "✈️ <b>Telegram:</b>\n"
-    "• https://t.me/uaoldmusic\n"
+    "✈️ <b>Telegram спільнота:</b>\n"
+    "• https://t.me/+JAAlAoGKmStiYWUy\n"
     "🎬 <b>TikTok:</b>\n"
     "• https://www.tiktok.com/@ua_mussicc/\n"
     "▶️ <b>YouTube:</b>\n"

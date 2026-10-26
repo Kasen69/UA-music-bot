@@ -8,6 +8,7 @@ from aiogram.enums import ParseMode
 from config import BOT_TOKEN
 from handlers.channel import router as channel_router
 from handlers.music import router as music_router
+from handlers.rules import router as rules_router
 
 
 async def main():
@@ -26,7 +27,11 @@ async def main():
     dp = Dispatcher()
 
     # Кожен router підключаємо лише один раз.
-    dp.include_routers(channel_router, music_router)
+    dp.include_routers(
+        rules_router,
+        channel_router,
+        music_router,
+)
 
     await dp.start_polling(
         bot,
