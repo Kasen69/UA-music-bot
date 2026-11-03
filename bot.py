@@ -1,3 +1,4 @@
+
 import asyncio
 import logging
 
@@ -26,12 +27,11 @@ async def main():
 
     dp = Dispatcher()
 
-    # Кожен router підключаємо лише один раз.
     dp.include_routers(
         rules_router,
         channel_router,
         music_router,
-)
+    )
 
     await dp.start_polling(
         bot,
