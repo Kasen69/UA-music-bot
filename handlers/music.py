@@ -87,6 +87,8 @@ async def receive_mp3_audio(message: Message, state: FSMContext):
         filename=filename,
         message=message,
         state=state,
+        title=audio.title,
+        performer=audio.performer,
     )
 
 
@@ -108,10 +110,15 @@ async def receive_mp3_document(message: Message, state: FSMContext):
         return
 
     await save_mp3(
-        file_id=document.file_id,
+        file_id=audio.file_id,
         filename=filename,
         message=message,
         state=state,
+    )
+
+    await state.update_data(
+        original_title=audio.title,
+        original_performer=audio.performer,
     )
 
 
@@ -124,6 +131,8 @@ async def save_mp3(
     filename: str,
     message: Message,
     state: FSMContext,
+    title: str = None,
+    performer: str = None,
 ):
     temp_dir = Path(
         tempfile.mkdtemp(prefix="music_cover_bot_")
@@ -154,6 +163,8 @@ async def save_mp3(
             temp_dir=str(temp_dir),
             mp3_path=str(mp3_path),
             filename=filename,
+            original_title=title,
+            original_performer=performer,   
         )
 
         await message.answer(
@@ -312,8 +323,9 @@ async def finish(
                 filename=filename,
             ),
             thumbnail=FSInputFile(cover_path),
+            title=data.get("original_title"),
+            performer=data.get("original_performer"),
         )
-
     except Exception:
         logger.exception(
             "Помилка під час обробки MP3"
