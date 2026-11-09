@@ -55,6 +55,31 @@ async def check_upcoming_birthdays(bot: Bot):
         except Exception as e:
             print(f"Не вдалося надіслати сповіщення для менеджера {manager_id}: {e}")
 
+# Додайте ці функції у ваш services/birthdays.py
+
+async def get_birthdays_by_manager(manager_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT id, name, birth_date FROM birthdays WHERE manager_id = ?", (manager_id,)
+        ) as cursor:
+            return await cursor.fetchall()
+
+async def update_birthday_in_db(record_id: int, manager_id: int, name: str, birth_date: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE birthdays SET name = ?, birth_date = ? WHERE id = ? AND manager_id = ?",
+            (name, birth_date, record_id, manager_id)
+        )
+        await db.commit()
+
+async def delete_birthday_from_db(record_id: int, manager_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM birthdays WHERE id = ? AND manager_id = ?",
+            (record_id, manager_id)
+        )
+        await db.commit()
+
 def setup_birthday_scheduler(bot: Bot):
     scheduler = AsyncIOScheduler(timezone="Europe/Kyiv")
     scheduler.add_job(check_upcoming_birthdays, 'cron', hour=9, minute=0, args=[bot])
