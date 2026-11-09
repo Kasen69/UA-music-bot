@@ -6,9 +6,10 @@ class MusicState(StatesGroup):
 
 class BirthdayState(StatesGroup):
     waiting_for_name = State()
+    waiting_for_username = State()
     waiting_for_date = State()
 
-# Додайте у states.py
 class EditBirthdayState(StatesGroup):
     waiting_for_new_name = State()
+    waiting_for_new_username = State()
     waiting_for_new_date = State()
