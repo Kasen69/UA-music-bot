@@ -10,9 +10,6 @@ from config import BOT_TOKEN
 from handlers.channel import router as channel_router
 from handlers.music import router as music_router
 from handlers.rules import router as rules_router
-from handlers.birthdays import router as birthdays_router
-from handlers.profile import router as profile_router
-from services.birthdays import init_birthday_db, setup_birthday_scheduler
 
 
 async def main():
@@ -20,9 +17,6 @@ async def main():
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
-
-    # Ініціалізуємо базу даних днів народжень при запуску
-    await init_birthday_db()
 
     bot = Bot(
         token=BOT_TOKEN,
@@ -33,17 +27,11 @@ async def main():
 
     dp = Dispatcher()
 
-    # Підключаємо всі роутери
     dp.include_routers(
         rules_router,
         channel_router,
         music_router,
-        birthdays_router,
-        profile_router,
     )
-
-    # Запускаємо фоновий планувальник нагадувань
-    setup_birthday_scheduler(bot)
 
     logging.info("Бот запускається...")
 
