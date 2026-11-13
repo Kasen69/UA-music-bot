@@ -20,6 +20,7 @@ from services.music import (
     prepare_cover_images,
     replace_cover,
 )
+from services.memory import free_memory
 
 
 logger = logging.getLogger(__name__)
@@ -38,10 +39,13 @@ async def start_command(message: Message, state: FSMContext):
     await state.clear()
 
     await message.answer(
-        "🎵 <b>Music Cover Bot</b>\n\n"
-        "Надішли мені MP3-файл.\n\n"
-        "Після цього я попрошу фотографію, "
-        "яку потрібно поставити на обкладинку."
+        "👋 <b>Вітаємо у UA Music Bot!</b>\n\n"
+        "🎧 <b>Робота з обкладинками:</b>\n"
+        "• Надішліть MP3-файл, щоб встановити або оновити його обкладинку.\n\n"
+        "🤖 <b>AI-генератор постів (Gemini):</b>\n"
+        "• <code>/song &lt;посилання на YouTube або назва&gt;</code> — створення посту/огляду\n"
+        "• Надішліть будь-яке <b>фото</b> — аналіз зображення та генерація посту\n"
+        "• <code>/help</code> — повний список команд"
     )
 
     await state.set_state(MusicState.waiting_for_mp3)
@@ -55,6 +59,7 @@ async def cancel_command(message: Message, state: FSMContext):
 
     if temp_dir:
         shutil.rmtree(temp_dir, ignore_errors=True)
+    free_memory()
 
     await state.clear()
 
@@ -351,6 +356,7 @@ async def finish(
             temp_dir,
             ignore_errors=True,
         )
+        free_memory()
 
         await state.clear()
 

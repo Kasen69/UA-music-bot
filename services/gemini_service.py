@@ -1,0 +1,169 @@
+"""Gemini API Service for generating music posts and analyzing images."""
+
+import base64
+import json
+import mimetypes
+import re
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+from core.config import GEMINI_API_KEY, DEFAULT_MODEL
+
+
+class GeminiService:
+    """Interactions-based Gemini service for text & multimodal generation."""
+
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        self.api_key = api_key or GEMINI_API_KEY
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY is not set. Please add it to your .env file.")
+        
+        self._client = None
+        self.model = model or DEFAULT_MODEL
+
+    @property
+    def client(self):
+        """Лінива ініціалізація клієнта Gemini для збереження пам'яті."""
+        if self._client is None:
+            from google import genai
+            self._client = genai.Client(api_key=self.api_key)
+        return self._client
+
+    def _parse_structured_post(self, raw_text: str, default_title: str) -> Dict[str, Any]:
+        """Extract title, content, and hashtags from raw or JSON response."""
+        # Try JSON parsing first (in case model returned markdown code block ```json ... ```)
+        cleaned = raw_text.strip()
+        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+        if json_match:
+            try:
+                data = json.loads(json_match.group(1))
+                return {
+                    "title": data.get("title") or default_title,
+                    "content": data.get("content") or cleaned,
+                    "hashtags": data.get("hashtags") or [],
+                }
+            except Exception:
+                pass
+
+        try:
+            data = json.loads(cleaned)
+            if isinstance(data, dict):
+                return {
+                    "title": data.get("title") or default_title,
+                    "content": data.get("content") or cleaned,
+                    "hashtags": data.get("hashtags") or [],
+                }
+        except Exception:
+            pass
+
+        # Fallback: extract hashtags using regex and split lines for title
+        hashtags = re.findall(r"#\w+", raw_text)
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        
+        title = default_title
+        if lines:
+            first_line = lines[0].replace("#", "").replace("**", "").strip()
+            if len(first_line) < 100:
+                title = first_line
+
+        return {
+            "title": title,
+            "content": raw_text.strip(),
+            "hashtags": hashtags,
+        }
+
+    def generate_song_post(
+        self,
+        song_info: Dict[str, Any],
+        custom_instructions: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate an engaging music review / social post about a song.
+        """
+        title = song_info.get("title", "Unknown Title")
+        artist = song_info.get("artist", "")
+        desc = song_info.get("description", "")
+        url = song_info.get("url", "")
+
+        system_instruction = (
+            "Ти професійний музичний куратор, рецензент та копірайтер для соцмереж. "
+            "Твоє завдання — писати яскраві, емоційні та цікаві пости про музичні треки ВИКЛЮЧНО УКРАЇНСЬКОЮ МОВОЮ. "
+            "Аналізуй настрій треку, музичний стиль, звучання інструментів, вокал та атмосферу, "
+            "пояснюючи читачеві, чому цей трек варто почути. "
+            "Відповідь повертай ТІЛЬКИ у форматі валідного JSON об'єкта з трьома полями: "
+            "'title' (привабливий український заголовок для поста), "
+            "'content' (основний текст поста українською мовою, гарно відформатований на абзаци, з емодзі за потреби), "
+            "'hashtags' (масив із 4-8 релевантних хештегів українською та англійською мовами)."
+        )
+
+        user_prompt = f"""
+Інформація про пісню:
+- Назва: {title}
+- Виконавець/Канал: {artist}
+- Посилання: {url}
+- Опис/Уривок: {desc[:800]}
+
+Додаткові побажання користувача: {custom_instructions or "Створи захоплюючий пост-огляд українською мовою, розкриваючи вайб і глибину треку."}
+
+Згенеруй JSON пост українською мовою зараз.
+"""
+        interaction = self.client.interactions.create(
+            model=self.model,
+            system_instruction=system_instruction,
+            input=user_prompt,
+        )
+
+        raw_output = interaction.output_text or ""
+        return self._parse_structured_post(raw_output, default_title=f"Огляд: {title}")
+
+    def analyze_image_and_generate_post(
+        self,
+        image_path: str,
+        user_prompt: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Аналізує зображення (обкладинка альбому, постер, фото з концерту) та створює пост українською мовою.
+        """
+        path = Path(image_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Файл зображення не знайдено за шляхом: {image_path}")
+
+        mime_type, _ = mimetypes.guess_type(str(path))
+        if not mime_type or not mime_type.startswith("image/"):
+            mime_type = "image/jpeg"
+
+        system_instruction = (
+            "Ти креативний візуальний куратор, музичний історик та контент-мейкер. "
+            "Твоє завдання — детально проаналізувати надане зображення (естетику, колірну гаму, настрій, "
+            "видимий текст, символи, стиль обкладинки/постера) і написати захоплюючий, стильний пост ВИКЛЮЧНО УКРАЇНСЬКОЮ МОВОЮ. "
+            "Відповідь повертай ТІЛЬКИ у форматі валідного JSON об'єкта з трьома обов'язковими полями: "
+            "'title' (яскравий український заголовок, що передає настрій зображення), "
+            "'content' (текст поста українською мовою: опис візуального вайбу, асоціацій з музикою, емоцій та атмосфери), "
+            "'hashtags' (масив із 4-8 відповідних хештегів українською та англійською мовами)."
+        )
+
+        prompt_text = user_prompt or (
+            "Уважно проаналізуй це зображення і напиши надихаючий та атмосферний пост українською мовою "
+            "про його стиль, настрій та музичні асоціації."
+        )
+
+        # Upload using the Files API for maximum reliability
+        uploaded_file = self.client.files.upload(file=str(path))
+
+        interaction = self.client.interactions.create(
+            model=self.model,
+            system_instruction=system_instruction,
+            input=[
+                {"type": "text", "text": prompt_text},
+                {
+                    "type": "image",
+                    "uri": uploaded_file.uri,
+                    "mime_type": uploaded_file.mime_type or mime_type,
+                },
+            ],
+        )
+
+        raw_output = interaction.output_text or ""
+        return self._parse_structured_post(
+            raw_output,
+            default_title=f"Аналіз зображення: {path.name}",
+        )
