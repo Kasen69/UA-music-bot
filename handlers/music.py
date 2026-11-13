@@ -1,4 +1,4 @@
-
+import asyncio
 import logging
 import shutil
 import tempfile
@@ -16,6 +16,8 @@ from services.music import (
     is_mp3,
     is_image,
     check_mp3,
+    extract_metadata,
+    prepare_cover_images,
     replace_cover,
 )
 
@@ -110,15 +112,10 @@ async def receive_mp3_document(message: Message, state: FSMContext):
         return
 
     await save_mp3(
-        file_id=audio.file_id,
+        file_id=document.file_id,
         filename=filename,
         message=message,
         state=state,
-    )
-
-    await state.update_data(
-        original_title=audio.title,
-        original_performer=audio.performer,
     )
 
 
@@ -131,8 +128,8 @@ async def save_mp3(
     filename: str,
     message: Message,
     state: FSMContext,
-    title: str = None,
-    performer: str = None,
+    title: str | None = None,
+    performer: str | None = None,
 ):
     temp_dir = Path(
         tempfile.mkdtemp(prefix="music_cover_bot_")
@@ -151,7 +148,8 @@ async def save_mp3(
             mp3_path,
         )
 
-        if not check_mp3(mp3_path):
+        is_valid = await asyncio.to_thread(check_mp3, mp3_path)
+        if not is_valid:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
             await message.answer(
@@ -159,12 +157,20 @@ async def save_mp3(
             )
             return
 
+        if not title or not performer:
+            tag_title, tag_performer = await asyncio.to_thread(
+                extract_metadata,
+                mp3_path,
+            )
+            title = title or tag_title
+            performer = performer or tag_performer
+
         await state.update_data(
             temp_dir=str(temp_dir),
             mp3_path=str(mp3_path),
             filename=filename,
             original_title=title,
-            original_performer=performer,   
+            original_performer=performer,
         )
 
         await message.answer(
@@ -200,7 +206,7 @@ async def receive_cover_photo(message: Message, state: FSMContext):
 
     temp_dir = Path(data["temp_dir"])
 
-    cover_path = temp_dir / "cover.jpg"
+    cover_path = temp_dir / "cover_raw.jpg"
 
     try:
         await message.answer(
@@ -245,7 +251,7 @@ async def receive_cover_document(
 
     if not is_image(filename):
         await message.answer(
-            "❌ Надішли фотографію або JPG/PNG-файл."
+            "❌ Надішли фотографію або JPG/PNG/WEBP-файл."
         )
         return
 
@@ -255,7 +261,7 @@ async def receive_cover_document(
 
     extension = Path(filename).suffix.lower()
 
-    cover_path = temp_dir / f"cover{extension}"
+    cover_path = temp_dir / f"cover_raw{extension}"
 
     try:
         await message.answer(
@@ -301,10 +307,16 @@ async def finish(
     filename = data["filename"]
 
     try:
-        # Замінюємо виключно обкладинку.
-        replace_cover(
-            mp3_path,
+        embedded_cover, tg_thumb = await asyncio.to_thread(
+            prepare_cover_images,
             cover_path,
+            temp_dir,
+        )
+
+        await asyncio.to_thread(
+            replace_cover,
+            mp3_path,
+            embedded_cover,
         )
 
         logger.info(
@@ -316,13 +328,12 @@ async def finish(
             "📤 Готово! Надсилаю MP3..."
         )
 
-        # Зберігаємо початкову назву файлу.
         await message.answer_audio(
             audio=FSInputFile(
                 mp3_path,
                 filename=filename,
             ),
-            thumbnail=FSInputFile(cover_path),
+            thumbnail=FSInputFile(tg_thumb),
             title=data.get("original_title"),
             performer=data.get("original_performer"),
         )
@@ -364,5 +375,5 @@ async def wrong_mp3(message: Message):
 async def wrong_cover(message: Message):
     await message.answer(
         "🖼 Я очікую фотографію.\n\n"
-        "Надішли її як фото або JPG/PNG-файл."
+        "Надішли її як фото або JPG/PNG/WEBP-файл."
     )
