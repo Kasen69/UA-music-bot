@@ -16,6 +16,19 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 STORAGE_FILE = BASE_DIR / "posts.json"
 
+TEAM_USERNAMES: list[str] = [
+    "@ zahar_uuu",
+    "@ nazarkuman",
+    "@ one_pis34",
+    "@ Qi_Yan",
+    "@ Va_17ret",
+    "@ zaeratori",
+    "@ soda_2145",
+    "@ Wertreb",
+]
+
+COMMUNITY_CHAT_ID: int = -1004455018043
+ANNOUNCEMENTS_THREAD_ID: int = 4
 
 def check_bot_token():
     if not BOT_TOKEN:

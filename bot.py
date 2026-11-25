@@ -11,6 +11,7 @@ from handlers.channel import router as channel_router
 from handlers.music import router as music_router
 from handlers.rules import router as rules_router
 from handlers.autobot import router as autobot_router
+from handlers.team import router as team_router
 
 
 async def main():
@@ -35,6 +36,7 @@ async def main():
         channel_router,
         music_router,
         autobot_router,
+        team_router,
     )
 
     logging.info("Бот запускається...")
