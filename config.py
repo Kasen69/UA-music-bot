@@ -27,6 +27,7 @@ TEAM_USERNAMES: list[str] = [
     "@ Wertreb",
 ]
 
+ADMIN_IDS: set[int] = {879144294}
 COMMUNITY_CHAT_ID: int = -1004455018043
 ANNOUNCEMENTS_THREAD_ID: int = 4
 
