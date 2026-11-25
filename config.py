@@ -17,14 +17,14 @@ DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 STORAGE_FILE = BASE_DIR / "posts.json"
 
 TEAM_USERNAMES: list[str] = [
-    "@ zahar_uuu",
-    "@ nazarkuman",
-    "@ one_pis34",
-    "@ Qi_Yan",
-    "@ Va_17ret",
-    "@ zaeratori",
-    "@ soda_2145",
-    "@ Wertreb",
+    "@zahar_uuu",
+    "@nazarkuman",
+    "@one_pis34",
+    "@Qi_Yan",
+    "@Va_17ret",
+    "@zaeratori",
+    "@soda_2145",
+    "@Wertreb",
 ]
 
 ADMIN_IDS: set[int] = {879144294}
